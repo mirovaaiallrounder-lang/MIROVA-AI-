@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext x='50' y='50' font-size='80' font-family='Poppins, sans-serif' fill='%23a855f7' dominant-baseline='central' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MIROVA - AI All-Rounder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Poppins', 'sans-serif'],
+            },
+            colors: {
+              'mirova-bg-light': '#f0f2f5',
+              'mirova-bg-dark': '#0f0c29',
+              'mirova-card-light': 'rgba(255, 255, 255, 0.6)',
+              'mirova-card-dark': 'rgba(20, 16, 69, 0.6)',
+            },
+            boxShadow: {
+              'neon-purple': '0 0 5px rgba(168, 85, 247, 0.8), 0 0 10px rgba(168, 85, 247, 0.6)',
+              'neon-blue': '0 0 5px rgba(59, 130, 246, 0.8), 0 0 10px rgba(59, 130, 246, 0.6)',
+            }
+          },
+        },
+      }
+    </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react-dom/client": "https://aistudiocdn.com/react-dom@^19.2.0/client",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.27.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="antialiased">
+    <div id="root"></div>
+    <script type="module">
+import React, { useState, useEffect, useRef, useCallback, useContext, createContext } from 'react';
+import ReactDOM from 'react-dom/client';
+import { GoogleGenAI, Modality } from "@google/genai";
+import { marked } from 'https://cdn.jsdelivr.net/npm/marked/lib/marked.esm.js';
+
+// --- From types.ts ---
+const Theme = {
+  Light: 'light',
+  Dark: 'dark',
+};
+
+const Feature = {
+  Chat: 'Chat',
+  Image: 'Image',
+  AppBuilder: 'App Builder',
+  STT: 'STT',
+  History: 'History',
+  About: 'About',
+  Settings: 'Settings',
+};
+
+
+// --- From store.tsx ---
+const AuthContext = createContext({
+  user: null,
+  login: () => {},
+  logout: () => {},
+});
+
+const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(() => {
+    try {
+      const storedUser = localStorage.getItem('mirova-user');
+      return storedUser ? JSON.parse(storedUser) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem('mirova-user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('mirova-user');
+    }
+  }, [user]);
+
+  const login = (userData) => setUser(userData);
+  const logout = () => {
+    setUser(null);
+    // Also clear API key on logout for security
+    localStorage.removeItem('mirova-api-key'); 
+    // Force a reload to reset all states, including APIContext
+    window.location.reload();
+  };
+
+  return (
+    React.createElement(AuthContext.Provider, { value: { user, login, logout } }, children)
+  );
+};
+
+const HistoryContext = createContext({
+    history: [],
+    addHistoryItem: () => {},
+    clearHistory: () => {},
+});
+
+const HistoryProvider = ({ children }) => {
+    const [history, setHistory] = useState(() => {
+        try {
+            const storedHistory = localStorage.getItem('mirova-history');
+            return storedHistory ? JSON.parse(storedHistory) : [];
+        } catch {
+            return [];
+        }
+    });
+
+    useEffect(() => {
+        localStorage.setItem('mirova-history', JSON.stringify(history));
+    }, [history]);
+
+    const addHistoryItem = (item) => {
+        const newItem = {
+            ...item,
+            id: Date.now().toString(),
+            timestamp: new Date().toISOString(),
+        };
+        setHistory(prev => [newItem, ...prev]);
+    };
+    
+    const clearHistory = () => {
+        setHistory([]);
+    };
+
+    return (
+        React.createElement(HistoryContext.Provider, { value: { history, addHistoryItem, clearHistory } }, children)
+    );
+};
+
+const APIContext = createContext({
+    apiKey: null,
+    setApiKey: () => {},
+    aiClient: null,
+});
+
+const APIProvider = ({ children }) => {
+    const [apiKey, setApiKeyInternal] = useState(() => localStorage.getItem('mirova-api-key'));
+    const [aiClient, setAiClient] = useState(null);
+
+    useEffect(() => {
+        if (apiKey) {
+            localStorage.setItem('mirova-api-key', apiKey);
+            try {
+                const ai = new GoogleGenAI({ apiKey });
+                setAiClient(ai);
+            } catch (e) {
+                console.error("Failed to initialize GoogleGenAI:", e);
+                // Handle invalid key: clear it and the client
+                setAiClient(null);
+                localStorage.removeItem('mirova-api-key');
+                setApiKeyInternal(null);
+                alert("Invalid API Key provided. Please check your key and try again.");
+            }
+        } else {
+            localStorage.removeItem('mirova-api-key');
+            setAiClient(null);
+        }
+    }, [apiKey]);
+
+    const setApiKey = (key) => {
+        setApiKeyInternal(key);
+    };
+
+    return (
+        React.createElement(APIContext.Provider, { 
+            value: { 
+                apiKey, 
+                setApiKey, 
+                aiClient 
+            } 
+        }, children)
+    );
+};
+
+
+// --- From components.tsx ---
+const ChatIcon = ({ className }) => (
+  React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+    React.createElement('path', { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" })
+  )
+);
+
+const ImageIcon = ({ className }) => (
+  React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+    React.createElement('rect', { x: "3", y: "3", width: "18", height: "18", rx: "2", ry: "2" }),
+    React.createElement('circle', { cx: "8.5", cy: "8.5", r: "1.5" }),
+    React.createElement('polyline', { points: "21 15 16 10 5 21" })
+  )
+);
+
+const AppBuilderIcon = ({ className }) => (
+  React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+    React.createElement('path', { d: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" }),
+    React.createElement('path', { d: "M12 12l-2 2" })
+  )
+);
+
+const SttIcon = ({ className }) => (
+  React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+    React.createElement('path', { d: "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" }),
+    React.createElement('path', { d: "M19 10v2a7 7 0 0 1-14 0v-2" }),
+    React.createElement('line', { x1: "12", y1: "19", x2: "12", y2: "23" })
+  )
+);
+
+const HistoryIcon = ({ className }) => (
+    React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+        React.createElement('path', { d: "M1 4v6h6" }),
+        React.createElement('path', { d: "M3.51 15a9 9 0 1 0 2.13-9.36L1 10" })
+    )
+);
+
+const InfoIcon = ({ className }) => (
+    React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+        React.createElement('circle', { cx: "12", cy: "12", r: "10" }),
+        React.createElement('line', { x1: "12", y1: "16", x2: "12", y2: "12" }),
+        React.createElement('line', { x1: "12", y1: "8", x2: "12.01", y2: "8" })
+    )
+);
+
+const SettingsIcon = ({ className }) => (
+    React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+        React.createElement('path', { d: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" }),
+        React.createElement('circle', { cx: "12", cy: "12", r: "3" })
+    )
+);
+
+const SunIcon = ({ className }) => (
+  React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+    React.createElement('circle', { cx: "12", cy: "12", r: "5" }),
+    React.createElement('line', { x1: "12", y1: "1", x2: "12", y2: "3" }),
+    React.createElement('line', { x1: "12", y1: "21", x2: "12", y2: "23" }),
+    React.createElement('line', { x1: "4.22", y1: "4.22", x2: "5.64", y2: "5.64" }),
+    React.createElement('line', { x1: "18.36", y1: "18.36", x2: "19.78", y2: "19.78" }),
+    React.createElement('line', { x1: "1", y1: "12", x2: "3", y2: "12" }),
+    React.createElement('line', { x1: "21", y1: "12", x2: "23", y2: "12" }),
+    React.createElement('line', { x1: "4.22", y1: "19.78", x2: "5.64", y2: "18.36" }),
+    React.createElement('line', { x1: "18.36", y1: "5.64", x2: "19.78", y2: "4.22" })
+  )
+);
+
+const MoonIcon = ({ className }) => (
+  React.createElement('svg', { className, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+    React.createElement('path', { d: "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" })
+  )
+);
+
+const GoogleIcon = ({ className }) => (
+    React.createElement('svg', { className, viewBox: "0 0 24 24", xmlns: "http://www.w3.org/2000/svg" },
+        React.createElement('path', { d: "M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z", fill: "#4285F4" }),
+        React.createElement('path', { d: "M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z", fill: "#34A853" }),
+        React.createElement('path', { d: "M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z", fill: "#FBBC05" }),
+        React.createElement('path', { d: "M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z", fill: "#EA4335" })
+    )
+);
+
+const FacebookIcon = ({ className }) => (
+    React.createElement('svg', { className, viewBox: "0 0 24 24", xmlns: "http://www.w3.org/2000/svg" },
+        React.createElement('path', { d: "M22 12c0-5.523-4.477-10-10-10S2 6.477 2 12c0 4.991 3.657 9.128 8.438 9.879V14.89h-2.54V12h2.54V9.797c0-2.506 1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.46h-1.26c-1.243 0-1.63.771-1.63 1.562V12h2.773l-.443 2.89h-2.33v7.028C18.343 21.128 22 16.991 22 12z", fill: "#1877F2" })
+    )
+);
+
+const LogoIcon = ({ className }) => (
+  React.createElement('img', { src: "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAJYAlwDASIAAhEBAxEB/8QAGwABAAMBAQEBAAAAAAAAAAAAAAECAwQFBgf/xABHEAACAgIBAQQGBgUHCgUFAAABAgADBBESITEFBhNBUSJhcYEUMpGhscEVI0JScpKi0eHwNDVEYoKSsjVjsvEXJzZ0g6LC/QAGAEBAQEBAQAAAAAAAAAAAAAAAAECAwT/xAAhEQEBAQEAAgICAwEBAAAAAAAAAQIRAxIhMQRBE1ETIv/aAAwDAQACEQMRAD8A+fAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-", alt: "MIROVA AI Logo", className })
+);
+
+const Header = ({ theme, setTheme, setActiveFeature }) => {
+    const { user, logout } = useContext(AuthContext);
+
+    return (
+      React.createElement('header', { className: "fixed top-0 left-0 right-0 z-20 bg-transparent backdrop-blur-md" },
+        React.createElement('div', { className: "container mx-auto px-4 sm:px-6 lg:px-8" },
+          React.createElement('div', { className: "flex items-center justify-between h-16" },
+            React.createElement('button', {
+                onClick: () => setActiveFeature(Feature.Chat),
+                className: "flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-purple-500 rounded-lg p-1 -ml-1 transition-transform hover:scale-105",
+                'aria-label': "Go to Home"
+            },
+              React.createElement(LogoIcon, { className: "h-8 w-auto" }),
+              React.createElement('h1', { className: "text-2xl font-bold tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-blue-500" }, "MIROVA AI")
+            ),
+            React.createElement('div', { className: "flex items-center gap-4" },
+                React.createElement('button', {
+                  onClick: () => setTheme(theme === Theme.Dark ? Theme.Light : Theme.Dark),
+                  className: "p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                },
+                  theme === Theme.Dark ? React.createElement(SunIcon, { className: "w-6 h-6" }) : React.createElement(MoonIcon, { className: "w-6 h-6" })
+                ),
+                user && (
+                    React.createElement('div', { className: "flex items-center gap-2" },
+                        React.createElement('button', {
+                            onClick: () => setActiveFeature(Feature.Settings),
+                            className: "p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors",
+                            'aria-label': "Settings"
+                        },
+                          React.createElement(SettingsIcon, { className: "w-6 h-6" })
+                        ),
+                        React.createElement('div', { className: "w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white font-bold text-sm" },
+                            user.name.charAt(0).toUpperCase()
+                        ),
+                        React.createElement('button', { onClick: logout, className: "p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors", 'aria-label': "Logout" },
+                            React.createElement('svg', { className: "w-5 h-5", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" },
+                                React.createElement('path', { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" }),
+                                React.createElement('polyline', { points: "16 17 21 12 16 7" }),
+                                React.createElement('line', { x1: "21", y1: "12", x2: "9", y2: "12" })
+                            )
+                        )
+                    )
+                )
+            )
+          )
+        )
+      )
+    );
+};
+
+const FloatingMenu = ({ activeFeature, setActiveFeature }) => {
+  const features = [
+    { name: Feature.Chat, icon: React.createElement(ChatIcon, { className: "w-6 h-6" }) },
+    { name: Feature.Image, icon: React.createElement(ImageIcon, { className: "w-6 h-6" }) },
+    { name: Feature.AppBuilder, icon: React.createElement(AppBuilderIcon, { className: "w-6 h-6" }) },
+    { name: Feature.STT, icon: React.createElement(SttIcon, { className: "w-6 h-6" }) },
+    { name: Feature.History, icon: React.createElement(HistoryIcon, { className: "w-6 h-6" }) },
+    { name: Feature.About, icon: React.createElement(InfoIcon, { className: "w-6 h-6" }) },
+  ];
+
+  return (
+    React.createElement('footer', { className: "fixed bottom-4 left-1/2 -translate-x-1/2 z-20 w-[95%] max-w-xl" },
+      React.createElement('div', { className: "bg-mirova-card-light dark:bg-mirova-card-dark backdrop-blur-lg rounded-full shadow-lg p-2 flex justify-around items-center ring-1 ring-white/10" },
+        features.map(({ name, icon }) => (
+          React.createElement('button', {
+            key: name,
+            onClick: () => setActiveFeature(name),
+            className: `p-3 rounded-full transition-all duration-300 ${
+              activeFeature === name
+                ? 'bg-purple-600 text-white shadow-neon-purple'
+                : 'text-gray-600 dark:text-gray-300 hover:bg-white/20'
+            }`,
+            'aria-label': name
+          },
+            icon
+          )
+        ))
+      )
+    )
+  );
+};
+
+const GlassCard = ({ children, className = '' }) => (
+    React.createElement('div', { className: `bg-mirova-card-light dark:bg-mirova-card-dark backdrop-blur-xl rounded-2xl shadow-lg ring-1 ring-white/10 p-6 ${className}` },
+        children
+    )
+);
+
+const LoadingSpinner = () => (
+    React.createElement('div', { className: "flex justify-center items-center" },
+        React.createElement('div', { className: "animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500" })
+    )
+);
+
+const AuthInput = ({ icon, isInvalid, ...props }) => {
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  const isPassword = props.type === 'password';
+
+  return (
+    React.createElement('div', { className: `relative flex items-center w-full transition-all duration-300 rounded-lg ${isInvalid ? 'ring-2 ring-red-500' : 'ring-1 ring-white/20 focus-within:ring-2 focus-within:ring-cyan-400'}` },
+      React.createElement('div', { className: "absolute left-3 top-1/2 -translate-y-1/2 text-white/50" },
+        icon
+      ),
+      React.createElement('input', {
+        ...props,
+        type: isPassword ? (isPasswordVisible ? 'text' : 'password') : props.type,
+        className: "w-full bg-black/20 text-white placeholder-white/50 px-10 py-3 rounded-lg focus:outline-none"
+      }),
+      isPassword && (
+        React.createElement('button', { type: "button", onClick: () => setIsPasswordVisible(!isPasswordVisible), className: "absolute right-3 top-1/2 -translate-y-1/2 text-white/50" },
+          isPasswordVisible ? 
+            React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M15 12a3 3 0 11-6 0 3 3 0 016 0z" }), React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" })) :
+            React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.542-7 .946-3.024 3.525-5.38 6.79-6.261M15 12a3 3 0 11-6 0 3 3 0 016 0z" }), React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M17.58 17.58l-2.08-2.08m-4.242-4.242L6.838 6.838M1 1l22 22" }))
+        )
+      )
+    )
+  );
+};
+
+
+// --- From gemini.ts ---
+const getChatResponse = async (ai, messages, onStream) => {
+    const model = 'gemini-2.5-flash';
+
+    const history = messages.slice(0, -1).map(msg => {
+        const parts = [{ text: msg.text }];
+        if (msg.images && msg.images.length > 0) {
+            msg.images.forEach(img => {
+                parts.unshift({ inlineData: { data: img.data, mimeType: img.mimeType } });
+            });
+        }
+        return { role: msg.role === 'model' ? 'model' : 'user', parts };
+    });
+
+    const lastMessage = messages[messages.length - 1];
+    const imageParts = (lastMessage.images || []).map(img => ({
+        inlineData: { data: img.data, mimeType: img.mimeType }
+    }));
+    const textPart = { text: lastMessage.text };
+    const finalParts = [...imageParts, textPart];
+
+    const chat = ai.chats.create({ model, history });
+    const result = await chat.sendMessageStream({ message: { parts: finalParts } });
+    
+    for await (const chunk of result) {
+        onStream(chunk.text);
+    }
+};
+
+const getImage = async (ai, prompt, style, aspectRatio) => {
+    const fullPrompt = `${prompt}, ${style} style`;
+    const response = await ai.models.generateImages({
+        model: 'imagen-4.0-generate-001',
+        prompt: fullPrompt,
+        config: {
+            numberOfImages: 1,
+            outputMimeType: 'image/jpeg',
+            aspectRatio: aspectRatio,
+        },
+    });
+    return response.generatedImages[0].image.imageBytes;
+};
+
+const editImage = async (ai, prompt, images) => {
+    const imageParts = images.map(img => ({
+        inlineData: { data: img.data, mimeType: img.mimeType }
+    }));
+    const textPart = { text: prompt };
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: { parts: [...imageParts, textPart] },
+        config: {
+            responseModalities: [Modality.IMAGE],
+        },
+    });
+
+    for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+            return part.inlineData.data;
+        }
+    }
+    throw new Error("No image was generated in the response.");
+};
+
+const getAppIdea = async (ai, prompt) => {
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-pro',
+        contents: `Generate a detailed app prototype description for the following idea. Use markdown for formatting, including headers, bold text, and lists. Idea: "${prompt}"`,
+    });
+    return response.text;
+};
+
+const transcribeAudio = async (ai, audio, language) => {
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: {
+            parts: [
+                { inlineData: audio },
+                { text: `Transcribe the following audio accurately. The language spoken is ${language}.` }
+            ]
+        }
+    });
+    return response.text;
+};
+
+
+// --- From auth.tsx ---
+const AuthScreens = () => {
+    const [screen, setScreen] = useState('welcome');
+
+    const renderScreen = () => {
+        switch (screen) {
+            case 'login': return React.createElement(LoginScreen, { setScreen });
+            case 'signup': return React.createElement(SignUpScreen, { setScreen });
+            case 'forgot': return React.createElement(ForgotPasswordScreen, { setScreen });
+            case 'welcome':
+            default:
+                return React.createElement(WelcomeScreen, { setScreen });
+        }
+    };
+
+    return (
+        React.createElement('div', { className: "min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-[#3C1053] to-[#ad5389] p-4" },
+           renderScreen()
+        )
+    );
+};
+
+const WelcomeScreen = ({ setScreen }) => (
+    React.createElement('div', { className: "text-center text-white animate-fade-in" },
+        React.createElement(LogoIcon, { className: "h-24 w-24 mx-auto mb-4" }),
+        React.createElement('h1', { className: "text-6xl font-bold tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-blue-400 mb-2" }, "MIROVA"),
+        React.createElement('p', { className: "text-lg text-white/80 mb-8" }, "Your All-in-One AI Companion."),
+        React.createElement('div', { className: "space-y-4" },
+            React.createElement('button', { onClick: () => setScreen('login'), className: "w-64 py-3 bg-cyan-400 text-slate-900 font-bold rounded-lg shadow-lg hover:scale-105 transition-transform" }, "🔑 Login"),
+            React.createElement('button', { onClick: () => setScreen('signup'), className: "w-64 py-3 bg-transparent border-2 border-cyan-400 text-cyan-400 font-bold rounded-lg shadow-lg hover:scale-105 transition-transform" }, "🆕 Create Account")
+        )
+    )
+);
+
+const GoogleAccountSelector = ({ onSelect, onClose }) => {
+    const mockAccounts = [
+        { name: 'Mirova User', email: 'user@gmail.com' },
+        { name: 'Creative Mind', email: 'creative.mind@gmail.com' },
+        { name: 'AI Explorer', email: 'ai.explorer@gmail.com' },
+    ];
+
+    return (
+        React.createElement('div', { className: "fixed inset-0 bg-black/60 z-50 flex items-center justify-center animate-fade-in", onClick: onClose },
+            React.createElement('div', { className: "bg-[#2e2e48] rounded-2xl p-6 w-full max-w-sm", onClick: e => e.stopPropagation() },
+                React.createElement('h3', { className: "text-xl font-bold text-white text-center mb-4" }, "Choose an account"),
+                React.createElement('div', { className: "space-y-3" },
+                    mockAccounts.map(account => (
+                        React.createElement('button', { key: account.email, onClick: () => onSelect(account), className: "w-full flex items-center gap-4 p-3 rounded-lg hover:bg-white/10 transition-colors" },
+                            React.createElement(GoogleIcon, { className: "w-6 h-6" }),
+                            React.createElement('div', { className: "text-left" },
+                                React.createElement('p', { className: "font-semibold text-white" }, account.name),
+                                React.createElement('p', { className: "text-sm text-white/70" }, account.email)
+                            )
+                        )
+                    ))
+                ),
+                React.createElement('button', { onClick: onClose, className: "w-full mt-4 py-2 text-cyan-400 text-sm font-semibold rounded-lg hover:bg-white/10" }, "Cancel")
+            )
+        )
+    );
+};
+
+const LoginScreen = ({ setScreen }) => {
+    const { login } = useContext(AuthContext);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+    const [showGoogleAccounts, setShowGoogleAccounts] = useState(false);
+
+    const handleLogin = () => {
+        if (!email || !password) {
+            setError('Please fill in all fields.');
+            return;
+        }
+        if (!/^\S+@\S+\.\S+$/.test(email)) {
+            setError('Invalid email format.');
+            return;
+        }
+        console.log('Attempting login with:', email);
+        setError('');
+        login({ name: email.split('@')[0], email: email });
+    };
+    
+    const handleGoogleSelect = (user) => {
+        console.log('Simulating Google login with:', user.email);
+        setError('');
+        login(user);
+        setShowGoogleAccounts(false);
+    };
+
+    const handleFacebookLogin = () => {
+        console.log('Simulating Facebook login...');
+        setError('');
+        login({ name: 'Facebook User', email: 'user@facebook.com' });
+    };
+
+    return (
+        React.createElement(React.Fragment, null,
+            showGoogleAccounts && React.createElement(GoogleAccountSelector, { onSelect: handleGoogleSelect, onClose: () => setShowGoogleAccounts(false) }),
+            React.createElement('div', { className: "w-full max-w-md p-8 space-y-6 bg-black/20 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 text-white" },
+                React.createElement('div', { className: "text-center" },
+                    React.createElement('h2', { className: "text-3xl font-bold" }, "Welcome Back to MIROVA 👋")
+                ),
+                error && React.createElement('p', { className: "text-red-400 text-center bg-red-900/50 p-2 rounded-md" }, error),
+                React.createElement('div', { className: "space-y-4" },
+                    React.createElement(AuthInput, { icon: React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M16 12a4 4 0 10-8 0 4 4 0 008 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5 1.207" })), type: "email", placeholder: "Enter your email address", value: email, onChange: e => setEmail(e.target.value), isInvalid: error.includes('email') }),
+                    React.createElement(AuthInput, { icon: React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" })), type: "password", placeholder: "Enter your password", value: password, onChange: e => setPassword(e.target.value), isInvalid: error.includes('password') })
+                ),
+                React.createElement('button', { onClick: () => setScreen('forgot'), className: "text-sm text-cyan-400 hover:underline" }, "Forgot Password?"),
+                React.createElement('button', { onClick: handleLogin, className: "w-full py-3 bg-cyan-400 text-slate-900 font-bold rounded-lg shadow-lg hover:scale-105 transition-transform" }, "Login"),
+                React.createElement('div', { className: "flex items-center gap-4" },
+                    React.createElement('hr', { className: "w-full border-white/20" }),
+                    React.createElement('span', { className: "text-white/60 text-sm" }, "or"),
+                    React.createElement('hr', { className: "w-full border-white/20" })
+                ),
+                React.createElement('div', { className: "flex gap-4" },
+                    React.createElement('button', { onClick: () => setShowGoogleAccounts(true), className: "flex-1 flex items-center justify-center gap-2 py-2 bg-white text-black/80 rounded-lg hover:bg-gray-200 transition-colors" }, React.createElement(GoogleIcon, { className: "w-6 h-6" }), " Google"),
+                    React.createElement('button', { onClick: handleFacebookLogin, className: "flex-1 flex items-center justify-center gap-2 py-2 bg-[#1877F2] text-white rounded-lg hover:bg-blue-700 transition-colors" }, React.createElement(FacebookIcon, { className: "w-6 h-6" }), " Facebook")
+                ),
+                React.createElement('p', { className: "text-center text-sm" }, "Don't have an account? ", React.createElement('button', { onClick: () => setScreen('signup'), className: "font-bold text-cyan-400 hover:underline" }, "Create one"))
+            )
+        )
+    );
+};
+
+const SignUpScreen = ({ setScreen }) => {
+    const handleSignup = () => {
+        alert("Account created successfully! Redirecting to login...");
+        setScreen('login');
+    };
+    
+    return (
+        React.createElement('div', { className: "w-full max-w-md p-8 space-y-6 bg-black/20 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 text-white" },
+            React.createElement('h2', { className: "text-3xl font-bold text-center" }, "Create Your MIROVA Account ✨"),
+             React.createElement('div', { className: "space-y-4" },
+                React.createElement(AuthInput, { icon: React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" })), type: "text", placeholder: "Full Name" }),
+                React.createElement(AuthInput, { icon: React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M16 12a4 4 0 10-8 0 4 4 0 008 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5 1.207" })), type: "email", placeholder: "Email Address" }),
+                React.createElement(AuthInput, { icon: React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" })), type: "password", placeholder: "Password" }),
+                React.createElement(AuthInput, { icon: React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" })), type: "password", placeholder: "Confirm Password" })
+            ),
+            React.createElement('button', { onClick: handleSignup, className: "w-full py-3 bg-cyan-400 text-slate-900 font-bold rounded-lg shadow-lg hover:scale-105 transition-transform" }, "Create Account"),
+            React.createElement('p', { className: "text-center text-sm" }, "Already have an account? ", React.createElement('button', { onClick: () => setScreen('login'), className: "font-bold text-cyan-400 hover:underline" }, "Login"))
+        )
+    );
+};
+
+const ForgotPasswordScreen = ({ setScreen }) => {
+    const handleReset = () => {
+        alert("Reset link sent successfully. Check your inbox.");
+        setScreen('login');
+    };
+    
+    return (
+         React.createElement('div', { className: "w-full max-w-md p-8 space-y-6 bg-black/20 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 text-white" },
+            React.createElement('div', { className: "text-center" },
+                React.createElement('h2', { className: "text-3xl font-bold" }, "Forgot your password?"),
+                React.createElement('p', { className: "text-white/70 mt-2" }, "Enter your registered email. We’ll send a reset link.")
+            ),
+            React.createElement(AuthInput, { icon: React.createElement('svg', { className: "w-5 h-5", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M16 12a4 4 0 10-8 0 4 4 0 008 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5 1.207" })), type: "email", placeholder: "Enter your email address" }),
+            React.createElement('button', { onClick: handleReset, className: "w-full py-3 bg-cyan-400 text-slate-900 font-bold rounded-lg shadow-lg hover:scale-105 transition-transform" }, "Send Reset Link"),
+            React.createElement('p', { className: "text-center text-sm" }, React.createElement('button', { onClick: () => setScreen('login'), className: "font-bold text-cyan-400 hover:underline" }, "Back to Login"))
+        )
+    );
+};
+
+
+// --- From features.tsx ---
+const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const result = reader.result;
+            const mimeType = result.split(':')[1].split(';')[0];
+            const base64Data = result.split(',')[1];
+            resolve({ data: base64Data, mimeType });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+};
+
+const ChatView = () => {
+    const { addHistoryItem } = useContext(HistoryContext);
+    const { aiClient } = useContext(APIContext);
+    const [messages, setMessages] = useState([]);
+    const [input, setInput] = useState('');
+    const [images, setImages] = useState([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const fileInputRef = useRef(null);
+    const messagesEndRef = useRef(null);
+
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    useEffect(scrollToBottom, [messages]);
+    
+    const handleFileUpload = async (event) => {
+        const files = event.target.files;
+        if (files) {
+           if (images.length + files.length > 30) {
+               alert('You can upload a maximum of 30 images.');
+               return;
+           }
+           const newImagePromises = Array.from(files).map(fileToBase64);
+           try {
+               const results = await Promise.all(newImagePromises);
+               setImages(prev => [...prev, ...results]);
+           } catch (err) {
+               console.error("Error reading files:", err);
+               alert("There was an error reading one of the files.");
+           }
+        }
+    };
+    
+    const removeImage = (indexToRemove) => {
+        setImages(prev => prev.filter((_, index) => index !== indexToRemove));
+    };
+
+    const handleSend = async () => {
+        if (!aiClient || (!input.trim() && images.length === 0)) return;
+
+        const userMessage = { id: Date.now().toString(), role: 'user', text: input, images: images };
+        setMessages(prev => [...prev, userMessage]);
+        
+        const userInputForHistory = input; // Capture input before clearing
+        setInput('');
+        setImages([]);
+        setIsLoading(true);
+
+        const currentMessages = [...messages, userMessage];
+        const modelMessageId = (Date.now() + 1).toString();
+        setMessages(prev => [...prev, { id: modelMessageId, role: 'model', text: '' }]);
+        
+        try {
+            let fullResponse = '';
+            const handleStream = (chunk) => {
+                fullResponse += chunk;
+                setMessages(prev => prev.map(m => 
+                    m.id === modelMessageId ? { ...m, text: fullResponse } : m
+                ));
+            };
+            
+            await getChatResponse(aiClient, currentMessages, handleStream);
+            addHistoryItem({ feature: Feature.Chat, prompt: userInputForHistory, result: { text: fullResponse } });
+            
+        } catch (error) {
+            console.error("Error fetching chat response:", error);
+            const errorMessage = "Sorry, I encountered an error. This might be due to an invalid API key or a network issue.";
+            setMessages(prev => prev.map(m => 
+                m.id === modelMessageId ? { ...m, text: errorMessage } : m
+            ));
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        React.createElement('div', { className: "h-full flex flex-col p-4" },
+            React.createElement('div', { className: "flex-grow overflow-y-auto mb-20 space-y-4" },
+                messages.map((msg) => (
+                    React.createElement('div', { key: msg.id, className: `flex items-end gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}` },
+                        React.createElement('div', { className: `max-w-xs md:max-w-md lg:max-w-lg p-3 rounded-2xl ${msg.role === 'user' ? 'bg-purple-600 text-white rounded-br-none' : 'bg-mirova-card-light dark:bg-mirova-card-dark text-gray-800 dark:text-gray-200 rounded-bl-none'}` },
+                           msg.images && msg.images.length > 0 && (
+                                React.createElement('div', { className: `grid gap-2 mb-2 ${msg.images.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}` },
+                                    msg.images.map((img, index) => (
+                                         React.createElement('img', { key: index, src: `data:${img.mimeType};base64,${img.data}`, alt: `user upload ${index + 1}`, className: "rounded-lg max-h-48 object-cover" })
+                                    ))
+                                )
+                            ),
+                           React.createElement('div', { className: "prose prose-sm dark:prose-invert max-w-none", dangerouslySetInnerHTML: { __html: msg.text ? marked(msg.text) : '' } })
+                        )
+                    )
+                )),
+                isLoading && messages[messages.length-1]?.role === 'user' && ( // Only show spinner if the last message was from user
+                    React.createElement('div', { className: "flex items-end gap-2 justify-start" },
+                        React.createElement('div', { className: "max-w-xs p-3 rounded-2xl bg-mirova-card-light dark:bg-mirova-card-dark text-gray-800 dark:text-gray-200 rounded-bl-none" },
+                            React.createElement('div', { className: "flex items-center space-x-2" },
+                                React.createElement('div', { className: "w-2 h-2 bg-purple-400 rounded-full animate-pulse" }),
+                                React.createElement('div', { className: "w-2 h-2 bg-purple-400 rounded-full animate-pulse [animation-delay:0.2s]" }),
+                                React.createElement('div', { className: "w-2 h-2 bg-purple-400 rounded-full animate-pulse [animation-delay:0.4s]" })
+                            )
+                        )
+                    )
+                ),
+                React.createElement('div', { ref: messagesEndRef })
+            ),
+            React.createElement('div', { className: "fixed bottom-24 left-1/2 -translate-x-1/2 w-[95%] max-w-lg z-10" },
+                 images.length > 0 && (
+                     React.createElement('div', { className: "p-2 bg-black/10 dark:bg-white/5 rounded-lg mb-2" },
+                        React.createElement('p', { className: "text-xs font-medium text-gray-700 dark:text-gray-300 mb-2" }, `Attached Images (${images.length}/30)`),
+                        React.createElement('div', { className: "grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-2 max-h-32 overflow-y-auto pr-2" },
+                            images.map((image, index) => (
+                                React.createElement('div', { key: index, className: "relative aspect-square group" },
+                                    React.createElement('img', { src: `data:${image.mimeType};base64,${image.data}`, className: "w-full h-full object-cover rounded-md" }),
+                                    React.createElement('button', { onClick: () => removeImage(index), className: "absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold leading-none opacity-0 group-hover:opacity-100 transition-opacity" }, "X")
+                                )
+                            ))
+                        )
+                    )
+                 ),
+                React.createElement('div', { className: "flex items-center bg-mirova-card-light dark:bg-mirova-card-dark backdrop-blur-lg rounded-full shadow-lg p-2 ring-1 ring-white/10" },
+                    React.createElement('input', { type: "file", ref: fileInputRef, onChange: handleFileUpload, accept: "image/*", className: "hidden", multiple: true }),
+                    React.createElement('button', { onClick: () => fileInputRef.current?.click(), className: "p-2 text-gray-600 dark:text-gray-300 hover:text-purple-500 transition-colors" },
+                        React.createElement('svg', { xmlns: "http://www.w3.org/2000/svg", width: "24", height: "24", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement('path', { d: "M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" }))
+                    ),
+                    React.createElement('input', { 
+                        type: "text",
+                        value: input,
+                        onChange: (e) => setInput(e.target.value),
+                        onKeyPress: (e) => e.key === 'Enter' && handleSend(),
+                        placeholder: "Message MIROVA...",
+                        className: "flex-grow bg-transparent focus:outline-none px-4 text-gray-800 dark:text-gray-200"
+                    }),
+                    React.createElement('button', { onClick: handleSend, className: "p-2 bg-purple-600 text-white rounded-full shadow-md hover:bg-purple-700 transition-colors disabled:opacity-50", disabled: isLoading || !aiClient },
+                         React.createElement('svg', { xmlns: "http://www.w3.org/2000/svg", width: "24", height: "24", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement('line', { x1: "22", y1: "2", x2: "11", y2: "13" }), React.createElement('polygon', { points: "22 2 15 22 11 13 2 9 22 2" }))
+                    )
+                )
+            )
+        )
+    );
+};
+
+const ImageView = () => {
+    const { addHistoryItem } = useContext(HistoryContext);
+    const { aiClient } = useContext(APIContext);
+    const [prompt, setPrompt] = useState('');
+    const [style, setStyle] = useState('Realistic');
+    const [resolution, setResolution] = useState('1:1');
+    const [isLoading, setIsLoading] = useState(false);
+    const [generatedImage, setGeneratedImage] = useState(null);
+    const [sourceImages, setSourceImages] = useState([]);
+    const [error, setError] = useState('');
+    const fileInputRef = useRef(null);
+
+    const handleFileChange = async (event) => {
+        const files = event.target.files;
+        if (files) {
+            if (sourceImages.length + files.length > 30) {
+                setError('You can upload a maximum of 30 images.');
+                return;
+            }
+            setError('');
+            const newImagePromises = Array.from(files).map(fileToBase64);
+            try {
+                const results = await Promise.all(newImagePromises);
+                setSourceImages(prev => [...prev, ...results]);
+            } catch (err) {
+                console.error(err);
+                setError("Failed to read one or more image files.");
+            }
+        }
+    };
+
+    const removeSourceImage = (indexToRemove) => {
+        setSourceImages(prev => prev.filter((_, index) => index !== indexToRemove));
+    };
+
+    const handleGenerate = async () => {
+        if (!prompt.trim() || !aiClient) return;
+        setIsLoading(true);
+        setGeneratedImage(null);
+        setError('');
+        try {
+            let base64Image;
+            if (sourceImages.length > 0) {
+                base64Image = await editImage(aiClient, prompt, sourceImages);
+            } else {
+                base64Image = await getImage(aiClient, prompt, style, resolution);
+            }
+            setGeneratedImage(base64Image);
+            addHistoryItem({ feature: Feature.Image, prompt, result: { imageUrl: base64Image } });
+        } catch (err) {
+            console.error(err);
+            setError('Failed to generate image. Please check your API key and prompt.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    
+    const styles = ['Realistic', '3D', 'Anime', 'Digital Art', 'Cartoon', 'Photographic', 'Fantasy'];
+    const resolutions = { '1:1': 'Square (1:1)', '16:9': 'Landscape (16:9)', '9:16': 'Portrait (9:16)', '4:3': 'Standard (4:3)', '3:4': 'Tall (3:4)' };
+
+    return (
+        React.createElement('div', { className: "p-4 space-y-6" },
+            React.createElement(GlassCard, null,
+                React.createElement('h2', { className: "text-xl font-bold mb-4 text-gray-800 dark:text-gray-200" }, "Image Generation & Editing"),
+                React.createElement('div', { className: "space-y-4" },
+                    React.createElement('textarea', { value: prompt, onChange: e => setPrompt(e.target.value), placeholder: sourceImages.length > 0 ? "Describe the edits (e.g., add a hat)..." : "A robot holding a red skateboard...", className: "w-full p-2 bg-white/50 dark:bg-black/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all", rows: 3 }),
+                    
+                    sourceImages.length > 0 && (
+                        React.createElement('div', { className: "p-2 bg-black/10 dark:bg-white/5 rounded-lg" },
+                            React.createElement('p', { className: "text-sm font-medium text-gray-700 dark:text-gray-300 mb-2" }, `Editing Images (${sourceImages.length}/30)`),
+                            React.createElement('div', { className: "grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-2 max-h-48 overflow-y-auto pr-2" },
+                                sourceImages.map((image, index) => (
+                                    React.createElement('div', { key: index, className: "relative aspect-square group" },
+                                        React.createElement('img', { src: `data:${image.mimeType};base64,${image.data}`, className: "w-full h-full object-cover rounded-md" }),
+                                        React.createElement('button', { onClick: () => removeSourceImage(index), className: "absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold leading-none opacity-0 group-hover:opacity-100 transition-opacity" }, "X")
+                                    )
+                                ))
+                            )
+                        )
+                    ),
+
+                    React.createElement('button', { onClick: () => fileInputRef.current?.click(), className: "w-full py-2 border-2 border-dashed border-purple-400/50 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-purple-400/10 transition-colors" },
+                        sourceImages.length > 0 ? 'Upload More Images' : 'Upload Image(s) to Edit (Optional)'
+                    ),
+                    React.createElement('input', { type: "file", ref: fileInputRef, onChange: handleFileChange, accept: "image/*", className: "hidden", multiple: true }),
+
+                    sourceImages.length === 0 && (
+                        React.createElement(React.Fragment, null,
+                            React.createElement('div', null,
+                                React.createElement('label', { className: "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1" }, "Style"),
+                                React.createElement('select', { value: style, onChange: e => setStyle(e.target.value), className: "w-full p-2 bg-white/50 dark:bg-black/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" },
+                                    styles.map(s => React.createElement('option', { key: s, value: s }, s))
+                                )
+                            ),
+                             React.createElement('div', null,
+                                React.createElement('label', { className: "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1" }, "Aspect Ratio"),
+                                React.createElement('select', { value: resolution, onChange: e => setResolution(e.target.value), className: "w-full p-2 bg-white/50 dark:bg-black/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500" },
+                                    Object.entries(resolutions).map(([value, label]) => React.createElement('option', { key: value, value: value }, label))
+                                )
+                            )
+                        )
+                    ),
+                    React.createElement('button', { onClick: handleGenerate, disabled: isLoading || !aiClient, className: "w-full py-3 bg-gradient-to-r from-purple-600 to-blue-500 text-white font-bold rounded-lg shadow-lg hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed" },
+                        isLoading ? 'Generating...' : (sourceImages.length > 0 ? 'Edit Image' : 'Generate Image')
+                    )
+                )
+            ),
+            
+            isLoading && React.createElement(LoadingSpinner, null),
+            error && React.createElement('p', { className: "text-red-500 text-center" }, error),
+            
+            generatedImage && (
+                React.createElement(GlassCard, null,
+                    React.createElement('img', { src: `data:image/jpeg;base64,${generatedImage}`, alt: prompt, className: "rounded-lg w-full" }),
+                    React.createElement('a', { href: `data:image/jpeg;base64,${generatedImage}`, download: "mirova-image.jpg", className: "mt-4 w-full block text-center py-2 bg-green-500 text-white font-bold rounded-lg hover:bg-green-600 transition-colors" },
+                        "Download Image"
+                    )
+                )
+            )
+        )
+    );
+};
+
+const AppBuilderView = () => {
+    const { addHistoryItem } = useContext(HistoryContext);
+    const { aiClient } = useContext(APIContext);
+    const [prompt, setPrompt] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [result, setResult] = useState('');
+    
+    const handleGenerate = async () => {
+        if (!prompt.trim() || !aiClient) return;
+        setIsLoading(true);
+        setResult('');
+        try {
+            const idea = await getAppIdea(aiClient, prompt);
+            setResult(idea);
+            addHistoryItem({ feature: Feature.AppBuilder, prompt, result: { text: idea } });
+        } catch(e) {
+            console.error(e);
+            setResult("An error occurred while generating the app concept.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        React.createElement('div', { className: "p-4 space-y-6" },
+            React.createElement(GlassCard, null,
+                React.createElement('h2', { className: "text-xl font-bold mb-4 text-gray-800 dark:text-gray-200" }, "App Builder (Concept)"),
+                React.createElement('p', { className: "text-sm text-gray-600 dark:text-gray-400 mb-4" }, "Describe your app idea in natural language. MIROVA will generate a detailed prototype description."),
+                React.createElement('div', { className: "space-y-4" },
+                    React.createElement('textarea', { value: prompt, onChange: e => setPrompt(e.target.value), placeholder: "A social media app for gardeners to share tips and photos of their plants...", className: "w-full p-2 bg-white/50 dark:bg-black/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500", rows: 4 }),
+                    React.createElement('button', { onClick: handleGenerate, disabled: isLoading || !aiClient, className: "w-full py-3 bg-gradient-to-r from-purple-600 to-blue-500 text-white font-bold rounded-lg shadow-lg hover:scale-105 transition-transform disabled:opacity-50" },
+                        isLoading ? 'Generating...' : 'Generate Prototype'
+                    )
+                )
+            ),
+            
+            isLoading && React.createElement(LoadingSpinner, null),
+
+            result && (
+                React.createElement(GlassCard, null,
+                    React.createElement('div', { className: "prose dark:prose-invert max-w-none", dangerouslySetInnerHTML: { __html: marked(result) } })
+                )
+            )
+        )
+    );
+};
+
+const SttView = () => {
+    const { addHistoryItem } = useContext(HistoryContext);
+    const { aiClient } = useContext(APIContext);
+    const [status, setStatus] = useState('idle');
+    const [transcription, setTranscription] = useState('');
+    const [error, setError] = useState('');
+    const [selectedFile, setSelectedFile] = useState(null);
+    const [language, setLanguage] = useState('Telugu');
+    const [copied, setCopied] = useState(false);
+
+    const fileInputRef = useRef(null);
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
+
+    const languages = ['Telugu', 'English', 'Hindi', 'Bengali', 'Marathi', 'Tamil', 'Urdu', 'Gujarati', 'Kannada', 'Malayalam', 'Punjabi'];
+
+    const cleanup = () => {
+        mediaRecorderRef.current = null;
+        audioChunksRef.current = [];
+        setSelectedFile(null);
+        setStatus('idle');
+    };
+    
+    const handleCopy = () => {
+        if (!transcription) return;
+        navigator.clipboard.writeText(transcription).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        });
+    };
+
+    const handleTranscription = async (audio, prompt) => {
+        setStatus('transcribing');
+        setTranscription('');
+        try {
+            const fullText = await transcribeAudio(aiClient, audio, language);
+            setTranscription(fullText);
+            if (fullText) {
+                addHistoryItem({ feature: Feature.STT, prompt: `${prompt} (${language})`, result: { text: fullText } });
+            }
+        } catch (err) {
+            console.error("Transcription error:", err);
+            setError("Failed to transcribe the audio. The file format might be unsupported by the model.");
+        } finally {
+            cleanup();
+        }
+    };
+    
+    const startRecording = async () => {
+        if (status !== 'idle' || !aiClient) return;
+        setStatus('recording');
+        setError('');
+        setTranscription('');
+        audioChunksRef.current = [];
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            mediaRecorderRef.current.ondataavailable = (event) => {
+                audioChunksRef.current.push(event.data);
+            };
+            mediaRecorderRef.current.start();
+        } catch (err) {
+            console.error("Microphone access error:", err);
+            setError("Could not access microphone. Please grant permission.");
+            setStatus('idle');
+        }
+    };
+
+    const stopRecording = () => {
+        if (status !== 'recording' || !mediaRecorderRef.current) return;
+
+        mediaRecorderRef.current.onstop = async () => {
+            const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.readAsDataURL(audioBlob);
+            reader.onloadend = () => {
+                const base64data = reader.result;
+                const audio = {
+                    data: base64data.split(',')[1],
+                    mimeType: 'audio/webm',
+                };
+                handleTranscription(audio, 'Live Recording');
+            };
+            mediaRecorderRef.current?.stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorderRef.current.stop();
+        setStatus('processing');
+    };
+    
+    const handleFileSelect = (event) => {
+        const file = event.target.files?.[0];
+        if (file && status === 'idle' && aiClient) {
+            setSelectedFile(file);
+            setError('');
+            setTranscription('');
+            handleTranscribeFile(file);
+        }
+    };
+
+    const handleTranscribeFile = async (file) => {
+        setStatus('processing');
+        try {
+           const { data, mimeType } = await fileToBase64(file);
+           handleTranscription({ data, mimeType }, `File: ${file.name}`);
+        } catch (err) {
+             console.error("File processing error:", err);
+             setError("Failed to process the audio file.");
+             cleanup();
+        }
+    };
+
+    const getStatusText = () => {
+        switch (status) {
+            case 'recording': return 'Listening...';
+            case 'processing': return `Processing: ${selectedFile?.name || 'Live Audio'}`;
+            case 'transcribing': return 'Transcribing...';
+            case 'idle':
+            default:
+                return 'Select a language, then record or upload';
+        }
+    }
+
+    return (
+        React.createElement('div', { className: "p-4 space-y-6" },
+            React.createElement(GlassCard, { className: "text-center" },
+                React.createElement('h2', { className: "text-xl font-bold mb-4 text-gray-800 dark:text-gray-200" }, "Speech to Text"),
+                React.createElement('p', { className: "text-sm text-gray-600 dark:text-gray-400 mb-4" }, "Select the language, then record your voice or upload an audio file for a complete transcription."),
+                React.createElement('div', { className: "mb-6" },
+                    React.createElement('label', { htmlFor: "language-select", className: "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1" }, "Audio Language"),
+                    React.createElement('select', { id: "language-select", value: language, onChange: e => setLanguage(e.target.value), disabled: status !== 'idle', className: "w-full max-w-xs mx-auto p-2 bg-white/50 dark:bg-black/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50" },
+                        languages.map(lang => React.createElement('option', { key: lang, value: lang }, lang))
+                    )
+                ),
+                React.createElement('div', { className: "flex justify-center items-center gap-4" },
+                    React.createElement('button', { onClick: status === 'recording' ? stopRecording : startRecording, disabled: (status !== 'idle' && status !== 'recording') || !!selectedFile || !aiClient, className: `relative w-24 h-24 rounded-full transition-all duration-300 flex items-center justify-center mx-auto disabled:opacity-50 disabled:cursor-not-allowed ${status === 'recording' ? 'bg-red-500 shadow-neon-purple' : 'bg-purple-600 shadow-lg'}` },
+                        status === 'recording' ? React.createElement('div', { className: "w-8 h-8 bg-white rounded-md" }) : React.createElement(SttIcon, { className: "w-10 h-10 text-white" }),
+                        status === 'recording' && React.createElement('div', { className: "absolute inset-0 rounded-full border-2 border-white animate-ping" })
+                    ),
+                    React.createElement('div', { className: "text-2xl text-gray-400 dark:text-gray-600" }, "OR"),
+                     React.createElement('input', { type: "file", ref: fileInputRef, onChange: handleFileSelect, accept: "audio/*,video/*", className: "hidden" }),
+                     React.createElement('button', { onClick: () => fileInputRef.current?.click(), disabled: status !== 'idle' || !aiClient, className: "w-24 h-24 border-2 border-dashed border-purple-400/50 rounded-full flex flex-col items-center justify-center text-gray-600 dark:text-gray-300 hover:bg-purple-400/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" },
+                        React.createElement('svg', { className: "w-8 h-8 mb-1", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" }, React.createElement('path', { strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2", d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" })),
+                        React.createElement('span', { className: "text-xs" }, "Upload File")
+                    )
+                ),
+                 React.createElement('p', { className: "mt-4 text-sm font-semibold h-5" }, getStatusText())
+            ),
+            (status === 'processing' || status === 'transcribing') && (
+                 React.createElement(GlassCard, null,
+                    React.createElement('div', { className: "flex flex-col items-center justify-center" },
+                        React.createElement(LoadingSpinner, null),
+                        React.createElement('p', { className: "mt-2 text-gray-600 dark:text-gray-300" }, status === 'processing' ? 'Preparing audio for transcription...' : 'Transcribing...')
+                    )
+                )
+            ),
+            error && React.createElement('p', { className: "text-red-500 text-center bg-red-500/10 p-2 rounded-lg" }, error),
+            transcription && (
+                React.createElement(GlassCard, null,
+                    React.createElement('div', { className: "flex justify-between items-center mb-2" },
+                        React.createElement('h3', { className: "font-bold text-gray-800 dark:text-gray-200" }, "Transcription:"),
+                        React.createElement('button', { onClick: handleCopy, className: `px-3 py-1 text-sm font-semibold rounded-md transition-colors ${copied ? 'bg-green-500 text-white' : 'bg-purple-500 text-white hover:bg-purple-600'}` },
+                            copied ? 'Copied!' : 'Copy'
+                        )
+                    ),
+                    React.createElement('div', { className: "bg-black/5 dark:bg-white/5 p-3 rounded-lg" },
+                        React.createElement('p', { className: "text-gray-700 dark:text-gray-300 whitespace-pre-wrap max-h-60 overflow-y-auto" },
+                            transcription
+                        )
+                    )
+                )
+            )
+        )
+    );
+};
+
+const HistoryView = () => {
+    const { history, clearHistory } = useContext(HistoryContext);
+
+    return (
+        React.createElement('div', { className: "p-4 space-y-6" },
+            React.createElement(GlassCard, null,
+                React.createElement('div', { className: "flex justify-between items-center mb-4" },
+                    React.createElement('h2', { className: "text-xl font-bold text-gray-800 dark:text-gray-200" }, "History"),
+                    history.length > 0 && React.createElement('button', { onClick: clearHistory, className: "px-3 py-1 bg-red-500 text-white text-sm font-semibold rounded-md hover:bg-red-600 transition-colors" }, "Clear All")
+                ),
+                history.length === 0 ? (
+                    React.createElement('p', { className: "text-center text-gray-600 dark:text-gray-400" }, "Your history is empty. Start creating!")
+                ) : (
+                    React.createElement('div', { className: "space-y-4 max-h-[65vh] overflow-y-auto pr-2" },
+                        history.map(item => (
+                            React.createElement('div', { key: item.id, className: "p-4 bg-white/50 dark:bg-black/20 rounded-lg" },
+                                React.createElement('div', { className: "flex justify-between items-center mb-2" },
+                                    React.createElement('span', { className: "font-bold text-purple-600 dark:text-purple-400" }, item.feature),
+                                    React.createElement('span', { className: "text-xs text-gray-500 dark:text-gray-400" }, new Date(item.timestamp).toLocaleString())
+                                ),
+                                React.createElement('p', { className: "text-sm text-gray-600 dark:text-gray-300 mb-2 truncate" }, React.createElement('strong', null, "Prompt:"), ` ${item.prompt}`),
+                                item.result.text && React.createElement('p', { className: "text-sm text-gray-800 dark:text-gray-200 bg-black/5 dark:bg-white/5 p-2 rounded-md max-h-24 overflow-y-auto" }, item.result.text),
+                                item.result.imageUrl && React.createElement('img', { src: `data:image/jpeg;base64,${item.result.imageUrl}`, alt: item.prompt, className: "rounded-lg mt-2 max-h-48" }),
+                                item.result.videoUrl && React.createElement('video', { src: item.result.videoUrl, controls: true, className: "rounded-lg mt-2 max-h-48" })
+                            )
+                        ))
+                    )
+                )
+            )
+        )
+    );
+};
+
+const AboutView = () => {
+    const getVikasAge = () => {
+        const birthday = new Date('2011-01-23');
+        const today = new Date();
+        let age = today.getFullYear() - birthday.getFullYear();
+        const m = today.getMonth() - birthday.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birthday.getDate())) {
+            age--;
+        }
+        return age;
+    };
+    const age = getVikasAge();
+
+    return (
+        React.createElement('div', { className: "p-4 space-y-6" },
+            React.createElement(GlassCard, null,
+                React.createElement('div', { className: "flex justify-between items-center mb-4" },
+                    React.createElement('h2', { className: "text-xl font-bold text-gray-800 dark:text-gray-200" }, "About MIROVA")
+                ),
+                React.createElement('div', { className: "space-y-4 text-gray-700 dark:text-gray-300" },
+                    React.createElement('p', { className: "font-semibold text-lg" }, "MIROVA is a smart, creative, and conversational AI assistant."),
+                    React.createElement('p', null, "It combines multiple advanced AI models to deliver text, image, and voice capabilities, all powered by the Google Gemini API."),
+                    React.createElement('p', null, `Developed by G. Vikas, age ${age}.`)
+                )
+            )
+        )
+    );
+};
+
+const SettingsView = () => {
+    const { apiKey, setApiKey } = useContext(APIContext);
+    const [keyInput, setKeyInput] = useState(apiKey || '');
+    const [message, setMessage] = useState('');
+
+    const handleUpdate = () => {
+        if (!keyInput.trim()) {
+            setMessage('API Key cannot be empty.');
+            return;
+        }
+        setApiKey(keyInput.trim());
+        setMessage('API Key updated successfully!');
+        setTimeout(() => setMessage(''), 3000);
+    };
+
+    return (
+        React.createElement('div', { className: "p-4 space-y-6" },
+            React.createElement(GlassCard, null,
+                React.createElement('h2', { className: "text-xl font-bold mb-4 text-gray-800 dark:text-gray-200" }, "Settings"),
+                React.createElement('div', { className: "space-y-4" },
+                    React.createElement('label', { className: "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1" }, "Google AI API Key"),
+                    React.createElement('input', {
+                        type: "password",
+                        value: keyInput,
+                        onChange: e => setKeyInput(e.target.value),
+                        className: "w-full p-2 bg-white/50 dark:bg-black/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    }),
+                    React.createElement('button', { onClick: handleUpdate, className: "w-full py-2 bg-purple-600 text-white font-bold rounded-lg hover:bg-purple-700 transition-colors" }, "Update Key"),
+                    message && React.createElement('p', { className: "text-green-500 text-sm text-center" }, message),
+                    React.createElement('a', { href: "https://aistudio.google.com/app/apikey", target: "_blank", rel: "noopener noreferrer", className: "block text-center text-sm text-cyan-400 hover:underline" }, "Get or manage your API Keys")
+                )
+            )
+        )
+    );
+};
+
+
+// --- From App.tsx ---
+const App = () => {
+  return (
+    React.createElement(AuthProvider, null,
+        React.createElement(HistoryProvider, null,
+            React.createElement(APIProvider, null,
+                React.createElement(MirovaApp, null)
+            )
+        )
+    )
+  );
+};
+
+const ApiKeyScreen = () => {
+    const { setApiKey } = useContext(APIContext);
+    const [keyInput, setKeyInput] = useState('');
+    const [error, setError] = useState('');
+
+    const handleSave = () => {
+        if (!keyInput.trim()) {
+            setError('API Key cannot be empty.');
+            return;
+        }
+        setError('');
+        setApiKey(keyInput.trim());
+    };
+
+    return (
+        React.createElement('div', { className: "min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-[#3C1053] to-[#ad5389] p-4" },
+            React.createElement('div', { className: "w-full max-w-md p-8 space-y-6 bg-black/20 backdrop-blur-lg rounded-2xl ring-1 ring-white/10 text-white animate-fade-in" },
+                React.createElement('h2', { className: "text-2xl font-bold text-center" }, "Enter Your Google AI API Key"),
+                React.createElement('p', { className: "text-center text-sm text-white/70" }, "MIROVA needs an API key to access Google's AI models. Your key is stored securely in your browser and never shared."),
+                error && React.createElement('p', { className: "text-red-400 text-center bg-red-900/50 p-2 rounded-md" }, error),
+                React.createElement('input', {
+                    type: "password",
+                    value: keyInput,
+                    onChange: e => setKeyInput(e.target.value),
+                    placeholder: "Paste your API key here",
+                    className: "w-full bg-black/20 text-white placeholder-white/50 px-4 py-3 rounded-lg focus:outline-none ring-1 ring-white/20 focus:ring-2 focus:ring-cyan-400"
+                }),
+                React.createElement('button', { onClick: handleSave, className: "w-full py-3 bg-cyan-400 text-slate-900 font-bold rounded-lg shadow-lg hover:scale-105 transition-transform" }, "Save & Continue"),
+                React.createElement('a', { href: "https://aistudio.google.com/app/apikey", target: "_blank", rel: "noopener noreferrer", className: "block text-center text-sm text-cyan-400 hover:underline" }, "Get an API Key from Google AI Studio")
+            )
+        )
+    );
+};
+
+const MirovaApp = () => {
+    const { user } = useContext(AuthContext);
+    const { apiKey } = useContext(APIContext);
+    
+    const [theme, setTheme] = useState(() => {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          const storedTheme = window.localStorage.getItem('mirova-theme');
+          return storedTheme || Theme.Dark;
+        }
+        return Theme.Dark;
+    });
+
+    useEffect(() => {
+        const root = window.document.documentElement;
+        root.classList.remove(theme === Theme.Dark ? Theme.Light : Theme.Dark);
+        root.classList.add(theme);
+        localStorage.setItem('mirova-theme', theme);
+    }, [theme]);
+    
+    const renderContent = () => {
+        if (!user) {
+            return React.createElement(AuthScreens, null);
+        }
+        if (!apiKey) {
+            return React.createElement(ApiKeyScreen, null);
+        }
+        return React.createElement(MainApp, { theme, setTheme });
+    };
+
+    return (
+        React.createElement('div', { className: `min-h-screen font-sans ${theme === Theme.Light ? 'bg-mirova-bg-light text-gray-900' : 'bg-mirova-bg-dark text-gray-100 dark'} transition-colors duration-300` },
+            renderContent()
+        )
+    );
+};
+
+const MainApp = ({ theme, setTheme }) => {
+    const [activeFeature, setActiveFeature] = useState(Feature.Chat);
+
+    const renderFeature = () => {
+        switch (activeFeature) {
+          case Feature.Chat: return React.createElement(ChatView, null);
+          case Feature.Image: return React.createElement(ImageView, null);
+          case Feature.AppBuilder: return React.createElement(AppBuilderView, null);
+          case Feature.STT: return React.createElement(SttView, null);
+          case Feature.History: return React.createElement(HistoryView, null);
+          case Feature.About: return React.createElement(AboutView, null);
+          case Feature.Settings: return React.createElement(SettingsView, null);
+          default: return React.createElement(ChatView, null);
+        }
+    };
+
+    return (
+        React.createElement(React.Fragment, null,
+           React.createElement('div', { className: "absolute inset-0 z-0 overflow-hidden" },
+                React.createElement('div', { className: "absolute top-0 -left-1/4 w-full h-full bg-gradient-to-br from-purple-900/50 via-blue-900/30 to-transparent rounded-full filter blur-3xl animate-pulse opacity-30 dark:opacity-50" }),
+                React.createElement('div', { className: "absolute bottom-0 -right-1/4 w-full h-full bg-gradient-to-tl from-indigo-900/50 via-pink-900/30 to-transparent rounded-full filter blur-3xl animate-pulse animation-delay-4000 opacity-30 dark:opacity-50" })
+            ),
+            React.createElement('div', { className: "relative z-10 min-h-screen flex flex-col" },
+                React.createElement(Header, { theme, setTheme, setActiveFeature }),
+                React.createElement('main', { className: "flex-grow pt-16 pb-28" },
+                    React.createElement('div', { className: "container mx-auto px-4 sm:px-6 lg:px-8 h-full" },
+                       renderFeature()
+                    )
+                ),
+                React.createElement(FloatingMenu, { activeFeature, setActiveFeature })
+            )
+        )
+    );
+};
+
+
+// --- From index.tsx ---
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error("Could not find root element to mount to");
+}
+
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+  React.createElement(React.StrictMode, null,
+    React.createElement(App, null)
+  )
+);
+</script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
